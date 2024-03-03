@@ -105,6 +105,7 @@ class Fruit:
 
 @strawberry.type
 class Query:
+    fruit: Optional[Fruit] = strawberry_django.field()
     fruits: List[Fruit] = strawberry_django.field()
     field_filter: List[Fruit] = strawberry_django.field(filters=FieldFilter)
     type_filter: List[Fruit] = strawberry_django.field(filters=TypeFilter)
@@ -129,14 +130,76 @@ def test_field_filter_definition():
     assert field.get_filters() is None
 
 
-def test_without_filtering(query, fruits):
-    result = query("{ fruits { id name } }")
+def test_get_by_id(query, fruits):
+    fruit = models.Fruit.objects.create(name="strawberry")
+    result = query(
+        """
+      query GetFruit($id: ID!) {
+        fruit(pk: $id) {
+          id
+          name
+        }
+      }
+    """,
+        {"id": fruit.pk},
+    )
     assert not result.errors
-    assert result.data["fruits"] == [
-        {"id": "1", "name": "strawberry"},
-        {"id": "2", "name": "raspberry"},
-        {"id": "3", "name": "banana"},
-    ]
+    assert result.data["fruit"]["id"] == str(fruit.pk)
+    assert result.data["fruit"]["name"] == "strawberry"
+
+
+def test_get_by_id_for_non_existing(query, fruits):
+    result = query(
+        """
+      query GetFruit($id: ID!) {
+        fruit(pk: $id) {
+          id
+          name
+        }
+      }
+    """,
+        {"id": -1},
+    )
+    assert not result.errors
+    assert result.data["fruit"] is None
+
+
+def test_get_by_id_with_custom_get_queryset(fruits):
+    called_data = []
+
+    @strawberry_django.type(models.Fruit, filters=FruitFilter)
+    class Fruit:
+        id: auto
+        name: auto
+
+        @classmethod
+        def get_queryset(cls, queryset, info, **kwargs):
+            called_data.append(True)
+            return queryset
+
+    @strawberry.type
+    class Query:
+        fruit: Optional[Fruit] = strawberry_django.field()
+
+    schema = strawberry.Schema(query=Query)
+
+    fruit = models.Fruit.objects.create(name="strawberry")
+    result = schema.execute_sync(
+        """
+      query GetFruit($id: ID!) {
+        fruit(pk: $id) {
+          id
+          name
+        }
+      }
+    """,
+        {"id": fruit.pk},
+    )
+    assert not result.errors
+    assert result.data is not None
+    assert result.data["fruit"]["id"] == str(fruit.pk)
+    assert result.data["fruit"]["name"] == "strawberry"
+    assert called_data == [True]
 
 
 def test_exact(query, fruits):
